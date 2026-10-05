@@ -1,394 +1,269 @@
 import os
 import json
+import re
 import html
-import urllib.request
-import urllib.error
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError
 
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-6-luna")
 
-HTML = """
-<!DOCTYPE html>
-<html>
+SYSTEM_PROMPT = """
+You are UTME ATTACK FORCE AI, a clean and helpful JAMB/UTME study assistant.
+
+IMPORTANT RESPONSE RULES:
+1. Write in a clear, natural and well-organized way.
+2. Never put ### or other heading symbols in the visible answer.
+3. You may use **bold** for important answers. The website will render the bold correctly.
+4. Never use asterisks for anything except **bold**.
+5. For multiple questions, ALWAYS number them 1., 2., 3., etc.
+6. Keep each question and its options together.
+7. Put the final answer clearly on its own line as **Answer: X. [correct option]**.
+8. Give a short, useful explanation after each answer when appropriate.
+9. Separate different questions with a blank line.
+10. Do not add unnecessary introductions such as "Sure, I can help..." when the user asks a direct question.
+11. For a normal single question, give the answer first, then a concise explanation.
+12. Make the response suitable for a student preparing for UTME.
+"""
+
+HTML = r"""<!DOCTYPE html>
+<html lang="en">
 <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>UTME ATTACK FORCE AI</title>
-
-    <style>
-        * {
-            box-sizing: border-box;
-        }
-
-        body {
-            margin: 0;
-            font-family: Arial, sans-serif;
-            background: #0b0f15;
-            color: white;
-        }
-
-        header {
-            background: #171c23;
-            padding: 25px 15px;
-            text-align: center;
-        }
-
-        h1 {
-            margin: 0;
-            font-size: 32px;
-        }
-
-        .subtitle {
-            text-align: center;
-            color: #9da4b0;
-            font-size: 24px;
-            margin: 15px 0 25px;
-        }
-
-        #chat {
-            min-height: calc(100vh - 230px);
-            padding: 10px 28px 120px;
-        }
-
-        .message {
-            max-width: 82%;
-            padding: 18px 28px;
-            margin: 14px 0;
-            border-radius: 25px;
-            font-size: 20px;
-            line-height: 1.5;
-            word-wrap: break-word;
-        }
-
-        .bot {
-            background: #22272e;
-            margin-right: auto;
-        }
-
-        .user {
-            background: #238636;
-            margin-left: auto;
-        }
-
-        .input-area {
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            display: flex;
-            gap: 14px;
-            padding: 18px 20px;
-            background: #171c23;
-        }
-
-        #message {
-            flex: 1;
-            min-width: 0;
-            padding: 18px 24px;
-            border: none;
-            border-radius: 18px;
-            font-size: 20px;
-            outline: none;
-        }
-
-        button {
-            border: none;
-            border-radius: 18px;
-            padding: 0 30px;
-            background: #238636;
-            color: white;
-            font-size: 20px;
-            font-weight: bold;
-        }
-
-        button:disabled {
-            opacity: 0.6;
-        }
-
-        @media (max-width: 600px) {
-            h1 {
-                font-size: 29px;
-            }
-
-            .subtitle {
-                font-size: 21px;
-            }
-
-            #chat {
-                padding-left: 28px;
-                padding-right: 28px;
-            }
-
-            .message {
-                font-size: 19px;
-                max-width: 90%;
-            }
-
-            .input-area {
-                padding: 14px 20px;
-            }
-
-            #message {
-                font-size: 18px;
-                padding: 16px;
-            }
-
-            button {
-                padding: 0 22px;
-                font-size: 18px;
-            }
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UTME ATTACK FORCE AI</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0d1117;color:#f1f5f9;font-family:Arial,sans-serif}
+header{padding:18px 16px;text-align:center;background:#151b23;border-bottom:1px solid #293241}
+header h1{margin:0;font-size:22px}
+header p{margin:6px 0 0;color:#9ca3af;font-size:13px}
+#chat{height:calc(100vh - 145px);overflow-y:auto;padding:18px 12px 100px}
+.msg{max-width:92%;margin:10px 0;padding:14px 16px;border-radius:18px;line-height:1.55;white-space:normal;word-wrap:break-word}
+.user{margin-left:auto;background:#159447;color:white;border-bottom-right-radius:5px}
+.ai{margin-right:auto;background:#20262e;color:#f5f5f5;border-bottom-left-radius:5px}
+.ai p{margin:0 0 12px}
+.ai p:last-child{margin-bottom:0}
+.ai strong{font-weight:800}
+.ai .q{margin-top:12px}
+.composer{position:fixed;bottom:0;left:0;right:0;background:#11161d;border-top:1px solid #293241;padding:10px;display:flex;gap:8px}
+#input{flex:1;border:0;border-radius:22px;padding:13px 15px;background:#252b33;color:white;outline:none;font-size:15px}
+button{border:0;border-radius:22px;padding:0 16px;background:#18a34a;color:white;font-weight:bold}
+#mic{background:#374151;font-size:18px}
+button:disabled{opacity:.55}
+.typing{opacity:.65;font-style:italic}
+</style>
 </head>
-
 <body>
-
 <header>
-    <h1>🧠 UTME ATTACK FORCE AI</h1>
+<h1>UTME ATTACK FORCE AI</h1>
+<p>Ask your UTME questions</p>
 </header>
 
-<div class="subtitle">
-    Your JAMB/UTME AI Assistant
-</div>
+<div id="chat"></div>
 
-<div id="chat">
-    <div class="message bot">
-        🧠 Hello! I am UTME ATTACK FORCE AI.<br><br>
-        Ask me a UTME question and I will help you.
-    </div>
-</div>
-
-<div class="input-area">
-    <input
-        id="message"
-        type="text"
-        placeholder="Ask your UTME question..."
-        autocomplete="off"
-    >
-
-    <button id="send" onclick="sendMessage()">
-        Send
-    </button>
+<div class="composer">
+<input id="input" placeholder="Ask your UTME question..." autocomplete="off">
+<button id="mic" title="Voice input">🎤</button>
+<button id="send">Send</button>
 </div>
 
 <script>
-async function sendMessage() {
-    const input = document.getElementById("message");
-    const button = document.getElementById("send");
-    const chat = document.getElementById("chat");
+const chat = document.getElementById("chat");
+const input = document.getElementById("input");
+const send = document.getElementById("send");
+const mic = document.getElementById("mic");
 
-    const message = input.value.trim();
-
-    if (!message) {
-        return;
-    }
-
-    const userMessage = document.createElement("div");
-    userMessage.className = "message user";
-    userMessage.textContent = message;
-    chat.appendChild(userMessage);
-
-    input.value = "";
-    button.disabled = true;
-    button.textContent = "Thinking...";
-
-    chat.scrollTop = chat.scrollHeight;
-    window.scrollTo(0, document.body.scrollHeight);
-
-    const loading = document.createElement("div");
-    loading.className = "message bot";
-    loading.textContent = "🧠 Thinking...";
-    chat.appendChild(loading);
-
-    try {
-        const response = await fetch("/chat", {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                message: message
-            })
-        });
-
-        const data = await response.json();
-
-        loading.remove();
-
-        const botMessage = document.createElement("div");
-        botMessage.className = "message bot";
-
-        if (data.reply) {
-            botMessage.textContent = data.reply;
-        } else {
-            botMessage.textContent =
-                "Sorry, I could not get an AI response.";
-        }
-
-        chat.appendChild(botMessage);
-
-    } catch (error) {
-        loading.remove();
-
-        const errorMessage = document.createElement("div");
-        errorMessage.className = "message bot";
-        errorMessage.textContent =
-            "Sorry, there was a connection problem. Please try again.";
-
-        chat.appendChild(errorMessage);
-    }
-
-    button.disabled = false;
-    button.textContent = "Send";
-
-    window.scrollTo(0, document.body.scrollHeight);
+function addMessage(text, who, isTyping=false){
+  const div=document.createElement("div");
+  div.className="msg "+who+(isTyping?" typing":"");
+  div.innerHTML = who==="ai" ? formatAI(text) : escapeHTML(text);
+  chat.appendChild(div);
+  chat.scrollTop=chat.scrollHeight;
+  return div;
 }
 
-document.getElementById("message").addEventListener("keydown", function(event) {
-    if (event.key === "Enter") {
-        sendMessage();
-    }
-});
-</script>
+function escapeHTML(s){
+  return s.replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[c]));
+}
 
+function formatAI(raw){
+  let s=escapeHTML(raw.replace(/\r/g,""));
+
+  // Render Markdown bold, but do NOT show the ** characters.
+  s=s.replace(/\*\*(.+?)\*\*/gs,"<strong>$1</strong>");
+
+  // Remove heading markers if the model ever sends them.
+  s=s.replace(/^\s*#{1,6}\s*/gm,"");
+
+  // Turn numbered question starts into separated blocks.
+  s=s.replace(/(^|\n)(\d+)\.\s+/g,'$1<div class="q"><strong>$2.</strong> ');
+
+  // Close question blocks before the next numbered item.
+  s=s.replace(/<\/div>\s*(?=<div class="q">)/g,"</div>");
+
+  // Paragraphs from blank lines.
+  const parts=s.split(/\n\s*\n/);
+  s=parts.map(p=>{
+    if(p.trim().startsWith('<div class="q">')){
+      return p + (p.endsWith("</div>") ? "" : "</div>");
+    }
+    return "<p>"+p.replace(/\n/g,"<br>")+"</p>";
+  }).join("");
+
+  return s;
+}
+
+async function ask(){
+  const text=input.value.trim();
+  if(!text) return;
+
+  input.value="";
+  addMessage(text,"user");
+  const typing=addMessage("Thinking...","ai",true);
+  send.disabled=true;
+
+  try{
+    const r=await fetch("/ask",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({message:text})
+    });
+    const data=await r.json();
+    typing.remove();
+    if(!r.ok) throw new Error(data.error || "Request failed");
+    addMessage(data.answer,"ai");
+  }catch(e){
+    typing.remove();
+    addMessage("Sorry, I could not get an answer right now. "+e.message,"ai");
+  }finally{
+    send.disabled=false;
+    input.focus();
+  }
+}
+
+send.onclick=ask;
+input.addEventListener("keydown",e=>{if(e.key==="Enter")ask();});
+
+// Voice input: uses the phone/browser speech-recognition feature.
+// This avoids sending an audio file to the server.
+const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+if(SpeechRecognition){
+  const rec=new SpeechRecognition();
+  rec.lang="en-NG";
+  rec.interimResults=false;
+  rec.continuous=false;
+
+  mic.onclick=()=>{
+    try{
+      rec.start();
+      mic.textContent="🔴";
+    }catch(e){}
+  };
+
+  rec.onresult=e=>{
+    input.value=e.results[0][0].transcript;
+    mic.textContent="🎤";
+  };
+  rec.onerror=()=>mic.textContent="🎤";
+  rec.onend=()=>mic.textContent="🎤";
+}else{
+  mic.onclick=()=>{
+    alert("Voice input is not supported by this browser. Try Chrome on Android.");
+  };
+}
+</script>
 </body>
 </html>
 """
 
+def call_openai(message):
+    if not OPENAI_API_KEY:
+        raise RuntimeError("OPENAI_API_KEY is missing in Render environment variables.")
 
-def ask_openai(message):
-    api_key = os.environ.get("OPENAI_API_KEY")
-
-    if not api_key:
-        return "The AI API key has not been connected yet."
-
-    url = "https://api.openai.com/v1/responses"
-
-    request_data = {
-        "model": "gpt-6-luna",
-        "instructions": (
-            "You are UTME ATTACK FORCE AI, a helpful JAMB/UTME study assistant. "
-            "Answer UTME questions clearly and accurately. "
-            "For mathematics and science questions, show the important steps. "
-            "For multiple-choice questions, identify the correct option and explain why. "
-            "Keep answers understandable for Nigerian secondary-school students."
-        ),
-        "input": message
+    payload = {
+        "model": OPENAI_MODEL,
+        "instructions": SYSTEM_PROMPT,
+        "input": message,
     }
 
-    data = json.dumps(request_data).encode("utf-8")
-
-    request = urllib.request.Request(
-        url,
-        data=data,
+    req = Request(
+        "https://api.openai.com/v1/responses",
+        data=json.dumps(payload).encode("utf-8"),
         headers={
             "Content-Type": "application/json",
-            "Authorization": "Bearer " + api_key
+            "Authorization": "Bearer " + OPENAI_API_KEY,
         },
-        method="POST"
+        method="POST",
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            result = json.loads(response.read().decode("utf-8"))
+        with urlopen(req, timeout=90) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError("OpenAI API error: " + body[:500])
 
-        if result.get("output_text"):
-            return result["output_text"]
-
-        for item in result.get("output", []):
+    answer = data.get("output_text")
+    if not answer:
+        # Fallback for unusual response shapes.
+        pieces = []
+        for item in data.get("output", []):
             for content in item.get("content", []):
                 if content.get("type") == "output_text":
-                    return content.get("text", "")
+                    pieces.append(content.get("text", ""))
+        answer = "\n".join(pieces).strip()
 
-        return "I received the request, but I could not generate an answer."
+    if not answer:
+        raise RuntimeError("The AI returned an empty answer.")
 
-    except urllib.error.HTTPError as error:
-        error_body = error.read().decode("utf-8", errors="ignore")
-
-        print("OpenAI HTTP error:", error.code, error_body)
-
-        if error.code == 401:
-            return "The AI API key is invalid or not connected correctly."
-
-        return "The AI service returned an error. Please try again."
-
-    except Exception as error:
-        print("OpenAI connection error:", error)
-        return "I could not connect to the AI service. Please try again."
-
+    return answer
 
 class Handler(BaseHTTPRequestHandler):
+    def send_json(self, obj, status=200):
+        body=json.dumps(obj).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type","application/json; charset=utf-8")
+        self.send_header("Content-Length",str(len(body)))
+        self.send_header("Access-Control-Allow-Origin","*")
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_GET(self):
-        if self.path == "/":
+        if self.path == "/" or self.path.startswith("/?"):
+            body=HTML.encode("utf-8")
             self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Type","text/html; charset=utf-8")
+            self.send_header("Content-Length",str(len(body)))
             self.end_headers()
-            self.wfile.write(HTML.encode("utf-8"))
+            self.wfile.write(body)
         else:
-            self.send_response(404)
-            self.end_headers()
+            self.send_error(404)
 
     def do_POST(self):
-
-        if self.path != "/chat":
-            self.send_response(404)
-            self.end_headers()
+        if self.path != "/ask":
+            self.send_error(404)
             return
 
         try:
-            length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(length)
-
-            data = json.loads(body)
-            message = data.get("message", "").strip()
+            length=int(self.headers.get("Content-Length","0"))
+            data=json.loads(self.rfile.read(length).decode("utf-8"))
+            message=str(data.get("message","")).strip()
 
             if not message:
-                self.send_response(400)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-
-                self.wfile.write(
-                    json.dumps({
-                        "reply": "Please enter a question."
-                    }).encode("utf-8")
-                )
+                self.send_json({"error":"Please enter a question."},400)
                 return
 
-            reply = ask_openai(message)
-
-            response = json.dumps({
-                "reply": reply
-            })
-
-            self.send_response(200)
-            self.send_header(
-                "Content-Type",
-                "application/json; charset=utf-8"
-            )
-            self.end_headers()
-
-            self.wfile.write(response.encode("utf-8"))
-
-        except Exception as error:
-            print("Server error:", error)
-
-            self.send_response(500)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-
-            self.wfile.write(
-                json.dumps({
-                    "reply": "Something went wrong on the server."
-                }).encode("utf-8")
-            )
+            answer=call_openai(message)
+            self.send_json({"answer":answer})
+        except Exception as e:
+            self.send_json({"error":str(e)},500)
 
     def log_message(self, format, *args):
-        pass
+        print(format % args)
 
-
-port = int(os.environ.get("PORT", 10000))
-
-server = HTTPServer(("0.0.0.0", port), Handler)
-
-print("UTME ATTACK FORCE AI is running on port", port)
-
+port=int(os.environ.get("PORT","10000"))
+server=ThreadingHTTPServer(("0.0.0.0",port),Handler)
+print(f"UTME AI running on port {port}")
 server.serve_forever()
