@@ -774,4 +774,641 @@ id="status">
 </div>
 
 
-<div
+<div class="composer-row">
+
+<input
+id="message"
+placeholder="Enter a topic or question..."
+onkeydown="if(event.key === 'Enter') sendMessage()"
+>
+
+
+<button
+class="action"
+onclick="startVoice()"
+title="Voice input">
+
+🎤
+
+</button>
+
+
+<label
+class="action"
+title="Take or upload a photo">
+
+📷
+
+<input
+id="photo"
+type="file"
+accept="image/*"
+capture="environment"
+onchange="sendPhoto()"
+>
+
+</label>
+
+
+<button
+class="action send"
+onclick="sendMessage()">
+
+➤
+
+</button>
+
+</div>
+
+</div>
+
+
+<script>
+
+let mode = "read";
+
+
+function setMode(newMode) {
+
+    mode = newMode;
+
+    const readButton =
+        document.getElementById("readButton");
+
+    const practiceButton =
+        document.getElementById("practiceButton");
+
+    const status =
+        document.getElementById("status");
+
+    readButton.classList.remove("active");
+
+    practiceButton.classList.remove("active");
+
+
+    if (mode === "read") {
+
+        readButton.classList.add("active");
+
+        status.textContent =
+            "📖 READ MODE — Learn the topic";
+
+        document.getElementById("message")
+            .placeholder =
+            "Enter a topic to learn...";
+
+    } else {
+
+        practiceButton.classList.add("active");
+
+        status.textContent =
+            "🤖 PRACTICE MODE — AI-generated questions";
+
+        document.getElementById("message")
+            .placeholder =
+            "Enter a topic to practice...";
+
+    }
+}
+
+
+function addMessage(text, type) {
+
+    const chat =
+        document.getElementById("chat");
+
+    const message =
+        document.createElement("div");
+
+    message.className =
+        "message " + type;
+
+    message.textContent = text;
+
+    chat.appendChild(message);
+
+    window.scrollTo(
+        0,
+        document.body.scrollHeight
+    );
+
+    return message;
+}
+
+
+async function sendMessage() {
+
+    const input =
+        document.getElementById("message");
+
+    const message =
+        input.value.trim();
+
+    const subject =
+        document.getElementById("subject").value;
+
+    const topicInput =
+        document.getElementById("topic").value.trim();
+
+    const number =
+        document.getElementById("number").value;
+
+
+    if (!subject) {
+
+        alert("Please choose a subject first.");
+
+        return;
+    }
+
+
+    if (!message && !topicInput) {
+
+        alert("Please enter a topic or question.");
+
+        return;
+    }
+
+
+    const topic =
+        topicInput || message;
+
+
+    addMessage(
+        message || topic,
+        "user"
+    );
+
+
+    input.value = "";
+
+
+    const loading =
+        addMessage(
+            mode === "read"
+            ? "📖 Preparing your lesson..."
+            : "🤖 Preparing your practice questions...",
+            "ai"
+        );
+
+
+    try {
+
+        const response =
+            await fetch("/chat", {
+
+                method: "POST",
+
+                headers: {
+                    "Content-Type":
+                        "application/json"
+                },
+
+                body: JSON.stringify({
+
+                    message: message || topic,
+                    mode: mode,
+                    subject: subject,
+                    topic: topic,
+                    number: number
+
+                })
+
+            });
+
+
+        const data =
+            await response.json();
+
+
+        loading.remove();
+
+
+        addMessage(
+            data.reply ||
+            "Sorry, I could not process that request.",
+            "ai"
+        );
+
+
+    } catch (error) {
+
+        loading.textContent =
+            "Connection error. Please try again.";
+
+    }
+}
+
+
+async function sendPhoto() {
+
+    const fileInput =
+        document.getElementById("photo");
+
+    const file =
+        fileInput.files[0];
+
+    if (!file) return;
+
+
+    const subject =
+        document.getElementById("subject").value;
+
+
+    if (!subject) {
+
+        alert("Please choose a subject first.");
+
+        fileInput.value = "";
+
+        return;
+    }
+
+
+    addMessage(
+        "📷 Photo uploaded.",
+        "user"
+    );
+
+
+    const loading =
+        addMessage(
+            "🔎 Reading the image...",
+            "ai"
+        );
+
+
+    const reader =
+        new FileReader();
+
+
+    reader.onload =
+        async function() {
+
+            try {
+
+                const response =
+                    await fetch("/image", {
+
+                        method: "POST",
+
+                        headers: {
+                            "Content-Type":
+                                "application/json"
+                        },
+
+                        body: JSON.stringify({
+
+                            image:
+                                reader.result,
+
+                            subject:
+                                subject,
+
+                            mode:
+                                mode
+
+                        })
+
+                    });
+
+
+                const data =
+                    await response.json();
+
+
+                loading.remove();
+
+
+                addMessage(
+                    data.reply ||
+                    "I could not process the image.",
+                    "ai"
+                );
+
+
+            } catch (error) {
+
+                loading.textContent =
+                    "There was a problem processing the photo.";
+
+            }
+
+        };
+
+
+    reader.readAsDataURL(file);
+}
+
+
+function startVoice() {
+
+    const SpeechRecognition =
+        window.SpeechRecognition ||
+        window.webkitSpeechRecognition;
+
+
+    if (!SpeechRecognition) {
+
+        alert(
+            "Voice input is not supported by this browser. " +
+            "Try Chrome on Android."
+        );
+
+        return;
+    }
+
+
+    const recognition =
+        new SpeechRecognition();
+
+
+    recognition.lang = "en-NG";
+
+    recognition.interimResults = false;
+
+    recognition.maxAlternatives = 1;
+
+
+    recognition.onstart =
+        function() {
+
+            document.getElementById("status")
+                .textContent =
+                "🎤 Listening...";
+
+        };
+
+
+    recognition.onresult =
+        function(event) {
+
+            const text =
+                event.results[0][0].transcript;
+
+
+            document.getElementById("message")
+                .value = text;
+
+
+            document.getElementById("status")
+                .textContent =
+                mode === "read"
+                ? "📖 READ MODE"
+                : "🤖 PRACTICE MODE";
+
+        };
+
+
+    recognition.onerror =
+        function() {
+
+            document.getElementById("status")
+                .textContent =
+                "Voice input failed. Try again.";
+
+        };
+
+
+    recognition.start();
+}
+
+</script>
+
+</body>
+
+</html>
+"""
+
+
+# ============================================================
+# HOME
+# ============================================================
+
+@app.route("/")
+def home():
+
+    return render_template_string(HTML)
+
+
+# ============================================================
+# CHAT
+# ============================================================
+
+@app.route("/chat", methods=["POST"])
+def chat():
+
+    data = request.get_json(silent=True) or {}
+
+    message = str(
+        data.get("message", "")
+    ).strip()
+
+    mode = data.get(
+        "mode",
+        "read"
+    )
+
+    subject = str(
+        data.get("subject", "")
+    ).strip()
+
+    topic = str(
+        data.get("topic", "")
+    ).strip()
+
+    number = data.get(
+        "number",
+        5
+    )
+
+
+    if not subject:
+
+        return jsonify({
+            "reply":
+                "Please choose a subject first."
+        })
+
+
+    if not topic:
+
+        topic = message
+
+
+    if not topic:
+
+        return jsonify({
+            "reply":
+                "Please enter a topic or question."
+        })
+
+
+    try:
+
+        if mode == "read":
+
+            answer = read_topic(
+                subject,
+                topic
+            )
+
+        else:
+
+            try:
+
+                question_number = int(number)
+
+            except (
+                TypeError,
+                ValueError
+            ):
+
+                question_number = 5
+
+
+            question_number = max(
+                1,
+                min(
+                    question_number,
+                    20
+                )
+            )
+
+
+            answer = practice_topic(
+                subject,
+                topic,
+                question_number
+            )
+
+
+        return jsonify({
+            "reply": answer
+        })
+
+
+    except Exception as error:
+
+        error_text = str(error)
+
+        print(
+            "AI ERROR:",
+            repr(error),
+            flush=True
+        )
+
+        return jsonify({
+            "reply":
+                "AI ERROR\n\n" +
+                error_text
+        }), 500
+
+
+# ============================================================
+# IMAGE
+# ============================================================
+
+@app.route("/image", methods=["POST"])
+def image_question():
+
+    data = request.get_json(
+        silent=True
+    ) or {}
+
+    image = data.get(
+        "image"
+    )
+
+    subject = str(
+        data.get(
+            "subject",
+            ""
+        )
+    ).strip()
+
+    mode = data.get(
+        "mode",
+        "practice"
+    )
+
+
+    if not image:
+
+        return jsonify({
+            "reply":
+                "No image was received."
+        }), 400
+
+
+    if not subject:
+
+        return jsonify({
+            "reply":
+                "Please choose a subject first."
+        }), 400
+
+
+    try:
+
+        answer = solve_image(
+            image_data=image,
+            subject=subject,
+            mode=mode
+        )
+
+        return jsonify({
+            "reply": answer
+        })
+
+
+    except Exception as error:
+
+        error_text = str(error)
+
+        print(
+            "IMAGE ERROR:",
+            repr(error),
+            flush=True
+        )
+
+        return jsonify({
+            "reply":
+                "IMAGE ERROR\n\n" +
+                error_text
+        }), 500
+
+
+# ============================================================
+# HEALTH CHECK
+# ============================================================
+
+@app.route("/health")
+def health():
+
+    return jsonify({
+        "status": "ok",
+        "app": "UTME Attack Force AI",
+        "model": MODEL,
+        "openai_key_configured":
+            bool(OPENAI_API_KEY)
+    })
+
+
+# ============================================================
+# START
+# ============================================================
+
+if __name__ == "__main__":
+
+    port = int(
+        os.environ.get(
+            "PORT",
+            10000
+        )
+    )
+
+    app.run(
+        host="0.0.0.0",
+        port=port
+    )
