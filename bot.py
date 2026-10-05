@@ -1,34 +1,37 @@
 import os
+import json
+import urllib.request
+import urllib.error
 from flask import Flask, request, jsonify, render_template_string
-from openai import OpenAI
 
 app = Flask(__name__)
 
 # ============================================================
-# OPENAI SETTINGS
+# SETTINGS
 # ============================================================
 
-API_KEY = os.environ.get("OPENAI_API_KEY")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
 
 MODEL = os.environ.get(
     "OPENAI_MODEL",
     "gpt-5.6-luna"
 )
 
-client = OpenAI(api_key=API_KEY) if API_KEY else None
+OPENAI_URL = "https://api.openai.com/v1/responses"
 
 
 # ============================================================
-# MAIN AI INSTRUCTIONS
+# SYSTEM INSTRUCTIONS
 # ============================================================
 
 SYSTEM_PROMPT = """
 You are UTME ATTACK FORCE AI.
 
-You are an educational AI assistant designed for Nigerian
-students preparing for UTME/JAMB and school examinations.
+You are an educational AI assistant for Nigerian students
+preparing for UTME, JAMB and school examinations.
 
-MAIN PURPOSE:
+Your purpose is:
+
 - UTME preparation
 - JAMB preparation
 - School examinations
@@ -39,7 +42,8 @@ MAIN PURPOSE:
 - Step-by-step solutions
 - Study assistance
 
-SUPPORTED SUBJECTS:
+SUPPORTED SUBJECTS INCLUDE:
+
 English Language
 Mathematics
 Physics
@@ -68,90 +72,86 @@ redirect the student to an educational topic.
 READ MODE
 ============================================================
 
-READ MODE is for learning a topic.
+READ MODE teaches a selected subject and topic.
 
-Teach the selected topic like an excellent secondary-school
-teacher.
+Use clear sections such as:
 
-Use this structure when appropriate:
-
-1. Topic introduction
+1. Introduction
 2. Simple definition
 3. Main ideas
 4. Important terms
 5. Detailed explanation
 6. Important formulas
 7. Worked examples
-8. UTME examination points
+8. UTME focus
 9. Common mistakes
-10. Quick revision summary
+10. Quick revision
 
-Use simple language.
+Use simple student-friendly English.
 
-Do not make the notes unnecessarily complicated.
+For Mathematics and Physics, write calculations clearly.
 
-For Mathematics and Physics, write mathematics clearly.
-
-Example:
+For example:
 
 Speed = Distance ÷ Time
 
-Do NOT use ugly computer notation such as:
+Do NOT write ugly computer notation such as:
 
 frac{distance}{time}
 
-Explain what every symbol means.
+Explain symbols clearly.
 
 ============================================================
 PRACTICE MODE
 ============================================================
 
-PRACTICE MODE creates NEW AI-GENERATED UTME-STYLE practice
-questions.
+PRACTICE MODE creates NEW AI-GENERATED UTME-STYLE
+practice questions.
 
 IMPORTANT:
 
-Every question created in Practice Mode is AI-GENERATED.
+Every question created by Practice Mode is AI-GENERATED.
 
 NEVER call it:
+
 - a genuine JAMB question
 - an original JAMB question
 - an authentic past question
 - an official JAMB question
 - a question from a particular JAMB year
 
-If multiple-choice questions are requested:
+If multiple-choice questions are requested, use:
 
 A. option
 B. option
 C. option
 D. option
 
-Then give:
+Then:
 
 Correct Answer:
 Explanation:
 
-Make the questions appropriate for serious UTME preparation.
+Make questions useful and challenging for UTME preparation.
 
 ============================================================
 PHOTO / CAMERA
 ============================================================
 
-When the student sends a photograph:
+When a student sends a photograph:
 
 1. Read the image carefully.
-2. Identify the question.
-3. Solve it.
-4. Show the working clearly.
+2. Identify the question or educational material.
+3. Solve or explain it.
+4. Show working clearly.
 5. Explain the reasoning.
 6. Give the final answer.
-7. If it is multiple choice, identify the correct option.
+7. If multiple choice, identify the correct option.
 
-Do not invent text that cannot be read.
+Never invent text that cannot be read.
 
-If the photograph is genuinely unclear, tell the student
-which part cannot be read.
+If part of the photograph is unclear, say exactly what
+cannot be read.
 
 ============================================================
 ACCURACY
@@ -159,7 +159,10 @@ ACCURACY
 
 Accuracy is more important than pretending to know something.
 
-Never invent claims about JAMB history or official questions.
+Never invent claims about JAMB history.
+
+Never present AI-generated questions as genuine JAMB
+past questions.
 
 ============================================================
 TEACHING STYLE
@@ -169,29 +172,133 @@ Be clear, friendly and student-friendly.
 
 Use headings, lists and spacing.
 
-Make the student understand WHY the answer is correct,
+Make students understand WHY an answer is correct,
 not just the final answer.
 """
 
 
 # ============================================================
-# AI TEXT REQUEST
+# OPENAI API CALL
 # ============================================================
 
-def ask_ai(prompt):
+def call_openai(input_data):
 
-    if not client:
+    if not OPENAI_API_KEY:
+
         raise RuntimeError(
-            "OPENAI_API_KEY is not configured on Render."
+            "OPENAI_API_KEY is missing from Render Environment Variables."
         )
 
-    response = client.responses.create(
-        model=MODEL,
-        instructions=SYSTEM_PROMPT,
-        input=prompt
+    payload = {
+        "model": MODEL,
+        "instructions": SYSTEM_PROMPT,
+        "input": input_data
+    }
+
+    body = json.dumps(payload).encode("utf-8")
+
+    req = urllib.request.Request(
+        OPENAI_URL,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + OPENAI_API_KEY
+        },
+        method="POST"
     )
 
-    return response.output_text
+    try:
+
+        with urllib.request.urlopen(
+            req,
+            timeout=120
+        ) as response:
+
+            raw = response.read().decode("utf-8")
+
+            data = json.loads(raw)
+
+            text = data.get("output_text")
+
+            if text:
+                return text
+
+            # Fallback if output_text is not available.
+            output = data.get("output", [])
+
+            collected = []
+
+            for item in output:
+
+                for content in item.get("content", []):
+
+                    if content.get("type") == "output_text":
+
+                        collected.append(
+                            content.get("text", "")
+                        )
+
+            result = "\n".join(collected).strip()
+
+            if result:
+                return result
+
+            raise RuntimeError(
+                "OpenAI returned a response but no text was found."
+            )
+
+    except urllib.error.HTTPError as error:
+
+        status = error.code
+
+        try:
+
+            error_body = error.read().decode("utf-8")
+
+            error_data = json.loads(error_body)
+
+            api_error = error_data.get("error", {})
+
+            error_type = api_error.get(
+                "type",
+                "unknown"
+            )
+
+            error_code = api_error.get(
+                "code",
+                "unknown"
+            )
+
+            error_message = api_error.get(
+                "message",
+                "No error message returned."
+            )
+
+            raise RuntimeError(
+                f"OpenAI API error {status}: "
+                f"{error_type} / {error_code} - "
+                f"{error_message}"
+            )
+
+        except json.JSONDecodeError:
+
+            raise RuntimeError(
+                f"OpenAI API HTTP error {status}: "
+                f"{error_body[:500]}"
+            )
+
+    except urllib.error.URLError as error:
+
+        raise RuntimeError(
+            "Could not connect to OpenAI API: "
+            + str(error.reason)
+        )
+
+    except TimeoutError:
+
+        raise RuntimeError(
+            "The request to OpenAI timed out."
+        )
 
 
 # ============================================================
@@ -211,35 +318,24 @@ TOPIC:
 
 Teach this topic as high-quality study notes.
 
-Use clear sections.
-
-Include:
+Use this structure:
 
 # {topic}
 
 ## Introduction
 
-Give a simple introduction.
-
 ## What is {topic}?
-
-Give a simple definition.
 
 ## Main ideas
 
-Explain the important concepts one by one.
-
 ## Important terms
 
-Explain important words the student must understand.
+## Detailed explanation
 
 ## Formulas
 
-If the topic contains formulas:
-
-Write formulas clearly.
-
-Explain what each symbol means.
+If formulas apply, write them clearly and explain every
+symbol.
 
 ## Worked examples
 
@@ -251,21 +347,15 @@ List the important points a UTME student should remember.
 
 ## Common mistakes
 
-Explain mistakes students commonly make.
-
 ## Quick revision
-
-End with a short revision summary.
-
-IMPORTANT:
 
 These are teaching notes.
 
-Do not claim that anything in the lesson is a genuine
+Do not claim that anything in this lesson is a genuine
 JAMB past question.
 """
 
-    return ask_ai(prompt)
+    return call_openai(prompt)
 
 
 # ============================================================
@@ -293,9 +383,11 @@ IMPORTANT:
 
 These are AI-GENERATED PRACTICE QUESTIONS.
 
-Do not call them genuine JAMB questions.
+Do NOT call them genuine JAMB questions.
 
-Do not attach a JAMB year to them.
+Do NOT call them original JAMB questions.
+
+Do NOT attach a JAMB year to them.
 
 For every multiple-choice question use:
 
@@ -317,12 +409,10 @@ Explanation:
 Make the questions challenging enough for serious UTME
 preparation.
 
-Use the selected subject and topic.
-
 For Mathematics and Physics, show calculations clearly.
 """
 
-    return ask_ai(prompt)
+    return call_openai(prompt)
 
 
 # ============================================================
@@ -331,25 +421,26 @@ For Mathematics and Physics, show calculations clearly.
 
 def solve_image(image_data, subject, mode):
 
-    if not client:
+    if not OPENAI_API_KEY:
+
         raise RuntimeError(
-            "OPENAI_API_KEY is not configured on Render."
+            "OPENAI_API_KEY is missing from Render Environment Variables."
         )
 
     if mode == "read":
 
-        mode_instruction = """
+        instruction = """
 The student is using READ MODE.
 
 Use the photograph as learning material.
 
-Explain the educational material shown in the image
-clearly and teach the student what it means.
+Explain the educational material shown in the image clearly
+and teach the student what it means.
 """
 
     else:
 
-        mode_instruction = """
+        instruction = """
 The student is using PRACTICE MODE.
 
 Solve the question shown in the photograph.
@@ -359,7 +450,7 @@ JAMB past question.
 """
 
     prompt = f"""
-{mode_instruction}
+{instruction}
 
 SUBJECT:
 {subject}
@@ -378,31 +469,28 @@ If the image contains notes or educational material,
 explain those notes clearly.
 
 If part of the image cannot be read, do not guess.
-Tell the student what part is unclear.
+
+Tell the student which part is unclear.
 """
 
-    response = client.responses.create(
-        model=MODEL,
-        instructions=SYSTEM_PROMPT,
-        input=[
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "input_text",
-                        "text": prompt
-                    },
-                    {
-                        "type": "input_image",
-                        "image_url": image_data,
-                        "detail": "original"
-                    }
-                ]
-            }
-        ]
-    )
+    image_input = [
+        {
+            "type": "input_text",
+            "text": prompt
+        },
+        {
+            "type": "input_image",
+            "image_url": image_data,
+            "detail": "high"
+        }
+    ]
 
-    return response.output_text
+    return call_openai([
+        {
+            "role": "user",
+            "content": image_input
+        }
+    ])
 
 
 # ============================================================
@@ -686,598 +774,4 @@ id="status">
 </div>
 
 
-<div class="composer-row">
-
-<input
-id="message"
-placeholder="Enter a topic or question..."
-onkeydown="if(event.key === 'Enter') sendMessage()"
->
-
-
-<button
-class="action"
-onclick="startVoice()"
-title="Voice input">
-
-🎤
-
-</button>
-
-
-<label
-class="action"
-title="Take or upload a photo">
-
-📷
-
-<input
-id="photo"
-type="file"
-accept="image/*"
-capture="environment"
-onchange="sendPhoto()"
->
-
-</label>
-
-
-<button
-class="action send"
-onclick="sendMessage()">
-
-➤
-
-</button>
-
-</div>
-
-</div>
-
-
-<script>
-
-let mode = "read";
-
-
-function setMode(newMode) {
-
-    mode = newMode;
-
-    const readButton =
-        document.getElementById("readButton");
-
-    const practiceButton =
-        document.getElementById("practiceButton");
-
-    const status =
-        document.getElementById("status");
-
-    readButton.classList.remove("active");
-
-    practiceButton.classList.remove("active");
-
-
-    if (mode === "read") {
-
-        readButton.classList.add("active");
-
-        status.textContent =
-            "📖 READ MODE — Learn the topic";
-
-        document.getElementById("message")
-            .placeholder =
-            "Enter a topic to learn...";
-
-    } else {
-
-        practiceButton.classList.add("active");
-
-        status.textContent =
-            "🤖 PRACTICE MODE — AI-generated questions";
-
-        document.getElementById("message")
-            .placeholder =
-            "Enter a topic to practice...";
-
-    }
-}
-
-
-function addMessage(text, type) {
-
-    const chat =
-        document.getElementById("chat");
-
-    const message =
-        document.createElement("div");
-
-    message.className =
-        "message " + type;
-
-    message.textContent = text;
-
-    chat.appendChild(message);
-
-    window.scrollTo(
-        0,
-        document.body.scrollHeight
-    );
-
-    return message;
-}
-
-
-async function sendMessage() {
-
-    const input =
-        document.getElementById("message");
-
-    const message =
-        input.value.trim();
-
-    const subject =
-        document.getElementById("subject").value;
-
-    const topicInput =
-        document.getElementById("topic").value.trim();
-
-    const number =
-        document.getElementById("number").value;
-
-
-    if (!subject) {
-
-        alert("Please choose a subject first.");
-
-        return;
-    }
-
-
-    if (!message && !topicInput) {
-
-        alert("Please enter a topic or question.");
-
-        return;
-    }
-
-
-    const topic =
-        topicInput || message;
-
-
-    addMessage(
-        message || topic,
-        "user"
-    );
-
-
-    input.value = "";
-
-
-    const loading =
-        addMessage(
-            mode === "read"
-            ? "📖 Preparing your lesson..."
-            : "🤖 Preparing your practice questions...",
-            "ai"
-        );
-
-
-    try {
-
-        const response =
-            await fetch("/chat", {
-
-                method: "POST",
-
-                headers: {
-                    "Content-Type":
-                        "application/json"
-                },
-
-                body: JSON.stringify({
-
-                    message: message || topic,
-                    mode: mode,
-                    subject: subject,
-                    topic: topic,
-                    number: number
-
-                })
-
-            });
-
-
-        const data =
-            await response.json();
-
-
-        loading.remove();
-
-
-        addMessage(
-            data.reply ||
-            "Sorry, I could not process that request.",
-            "ai"
-        );
-
-
-    } catch (error) {
-
-        loading.textContent =
-            "Connection error. Please try again.";
-
-    }
-}
-
-
-async function sendPhoto() {
-
-    const fileInput =
-        document.getElementById("photo");
-
-    const file =
-        fileInput.files[0];
-
-    if (!file) return;
-
-
-    const subject =
-        document.getElementById("subject").value;
-
-
-    if (!subject) {
-
-        alert("Please choose a subject first.");
-
-        fileInput.value = "";
-
-        return;
-    }
-
-
-    addMessage(
-        "📷 Photo uploaded.",
-        "user"
-    );
-
-
-    const loading =
-        addMessage(
-            "🔎 Reading the image...",
-            "ai"
-        );
-
-
-    const reader =
-        new FileReader();
-
-
-    reader.onload =
-        async function() {
-
-            try {
-
-                const response =
-                    await fetch("/image", {
-
-                        method: "POST",
-
-                        headers: {
-                            "Content-Type":
-                                "application/json"
-                        },
-
-                        body: JSON.stringify({
-
-                            image:
-                                reader.result,
-
-                            subject:
-                                subject,
-
-                            mode:
-                                mode
-
-                        })
-
-                    });
-
-
-                const data =
-                    await response.json();
-
-
-                loading.remove();
-
-
-                addMessage(
-                    data.reply ||
-                    "I could not process the image.",
-                    "ai"
-                );
-
-
-            } catch (error) {
-
-                loading.textContent =
-                    "There was a problem processing the photo.";
-
-            }
-
-        };
-
-
-    reader.readAsDataURL(file);
-}
-
-
-function startVoice() {
-
-    const SpeechRecognition =
-        window.SpeechRecognition ||
-        window.webkitSpeechRecognition;
-
-
-    if (!SpeechRecognition) {
-
-        alert(
-            "Voice input is not supported by this browser. " +
-            "Try Chrome on Android."
-        );
-
-        return;
-    }
-
-
-    const recognition =
-        new SpeechRecognition();
-
-
-    recognition.lang = "en-NG";
-
-    recognition.interimResults = false;
-
-    recognition.maxAlternatives = 1;
-
-
-    recognition.onstart =
-        function() {
-
-            document.getElementById("status")
-                .textContent =
-                "🎤 Listening...";
-
-        };
-
-
-    recognition.onresult =
-        function(event) {
-
-            const text =
-                event.results[0][0].transcript;
-
-
-            document.getElementById("message")
-                .value = text;
-
-
-            document.getElementById("status")
-                .textContent =
-                mode === "read"
-                ? "📖 READ MODE"
-                : "🤖 PRACTICE MODE";
-
-        };
-
-
-    recognition.onerror =
-        function() {
-
-            document.getElementById("status")
-                .textContent =
-                "Voice input failed. Try again.";
-
-        };
-
-
-    recognition.start();
-}
-
-</script>
-
-</body>
-
-</html>
-"""
-
-
-# ============================================================
-# HOME PAGE
-# ============================================================
-
-@app.route("/")
-def home():
-
-    return render_template_string(HTML)
-
-
-# ============================================================
-# CHAT ENDPOINT
-# ============================================================
-
-@app.route("/chat", methods=["POST"])
-def chat():
-
-    data = request.get_json(silent=True) or {}
-
-    message = data.get("message", "").strip()
-
-    mode = data.get("mode", "read")
-
-    subject = data.get("subject", "").strip()
-
-    topic = data.get("topic", "").strip()
-
-    number = data.get("number", 5)
-
-
-    if not subject:
-
-        return jsonify({
-            "reply":
-                "Please choose a subject first."
-        })
-
-
-    if not topic:
-
-        topic = message
-
-
-    if not topic:
-
-        return jsonify({
-            "reply":
-                "Please enter a topic or question."
-        })
-
-
-    try:
-
-        if mode == "read":
-
-            answer = read_topic(
-                subject,
-                topic
-            )
-
-        else:
-
-            try:
-                question_number = int(number)
-            except (TypeError, ValueError):
-                question_number = 5
-
-            question_number = max(
-                1,
-                min(question_number, 20)
-            )
-
-            answer = practice_topic(
-                subject,
-                topic,
-                question_number
-            )
-
-
-        return jsonify({
-            "reply": answer
-        })
-
-
-    except Exception as error:
-
-        print(
-            "AI ERROR:",
-            repr(error)
-        )
-
-        return jsonify({
-            "reply":
-                "The AI could not process the request right now. "
-                "Please try again."
-        }), 500
-
-
-# ============================================================
-# IMAGE ENDPOINT
-# ============================================================
-
-@app.route("/image", methods=["POST"])
-def image_question():
-
-    data = request.get_json(silent=True) or {}
-
-    image = data.get("image")
-
-    subject = data.get("subject", "").strip()
-
-    mode = data.get("mode", "practice")
-
-
-    if not image:
-
-        return jsonify({
-            "reply":
-                "No image was received."
-        }), 400
-
-
-    if not subject:
-
-        return jsonify({
-            "reply":
-                "Please choose a subject first."
-        }), 400
-
-
-    try:
-
-        answer = solve_image(
-            image_data=image,
-            subject=subject,
-            mode=mode
-        )
-
-
-        return jsonify({
-            "reply": answer
-        })
-
-
-    except Exception as error:
-
-        print(
-            "IMAGE ERROR:",
-            repr(error)
-        )
-
-        return jsonify({
-            "reply":
-                "I could not process that image. "
-                "Please make sure the photograph is clear and try again."
-        }), 500
-
-
-# ============================================================
-# HEALTH CHECK
-# ============================================================
-
-@app.route("/health")
-def health():
-
-    return jsonify({
-        "status": "ok",
-        "app": "UTME Attack Force AI"
-    })
-
-
-# ============================================================
-# START SERVER
-# ============================================================
-
-if __name__ == "__main__":
-
-    port = int(
-        os.environ.get(
-            "PORT",
-            10000
-        )
-    )
-
-    app.run(
-        host="0.0.0.0",
-        port=port
-)
+<div
