@@ -1,41 +1,45 @@
 import os
-import base64
 from flask import Flask, request, jsonify, render_template_string
 from openai import OpenAI
 
 app = Flask(__name__)
 
 # ============================================================
-# OPENAI
+# OPENAI SETTINGS
 # ============================================================
 
-client = OpenAI(
-    api_key=os.environ.get("OPENAI_API_KEY")
+API_KEY = os.environ.get("OPENAI_API_KEY")
+
+MODEL = os.environ.get(
+    "OPENAI_MODEL",
+    "gpt-5.6-luna"
 )
 
-MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.6-luna")
+client = OpenAI(api_key=API_KEY) if API_KEY else None
 
 
 # ============================================================
-# UTME ATTACK FORCE - EDUCATIONAL RULES
+# MAIN AI INSTRUCTIONS
 # ============================================================
 
 SYSTEM_PROMPT = """
 You are UTME ATTACK FORCE AI.
 
-You are an educational AI assistant for Nigerian students.
+You are an educational AI assistant designed for Nigerian
+students preparing for UTME/JAMB and school examinations.
 
-YOUR PURPOSE:
-- UTME/JAMB preparation
+MAIN PURPOSE:
+- UTME preparation
+- JAMB preparation
 - School examinations
 - Academic learning
-- Educational questions
 - Revision
-- Explanations
-- Step-by-step problem solving
+- Topic explanations
+- Practice questions
+- Step-by-step solutions
 - Study assistance
 
-SUPPORTED SUBJECTS INCLUDE:
+SUPPORTED SUBJECTS:
 English Language
 Mathematics
 Physics
@@ -48,270 +52,138 @@ Geography
 Civic Education
 Agricultural Science
 Computer/ICT
-and other legitimate academic subjects.
+and other legitimate school subjects.
 
-EDUCATION-ONLY RULE:
-You are NOT a general-purpose entertainment chatbot.
+============================================================
+EDUCATION FOCUS
+============================================================
 
-If a request is unrelated to education, school, learning, examinations,
-UTME/JAMB, or an academic subject, politely refuse and redirect the student
-to an educational topic.
+Stay focused on education, examinations, school subjects,
+learning and academic assistance.
 
-TRUE MODE RULE:
-TRUE MODE means GENUINE VERIFIED PAST UTME QUESTIONS.
+If a request is clearly unrelated to education, politely
+redirect the student to an educational topic.
 
-NEVER invent a question in TRUE MODE.
-NEVER change an AI-generated question and call it a genuine JAMB question.
-NEVER claim a question is from a particular JAMB year unless the application
-has supplied verified source information for that question.
+============================================================
+READ MODE
+============================================================
 
-If a genuine question is not available in the verified database, say clearly:
+READ MODE is for learning a topic.
 
-"I don't currently have a verified genuine question for that request."
+Teach the selected topic like an excellent secondary-school
+teacher.
 
-PRACTICE MODE RULE:
-PRACTICE MODE creates NEW AI-GENERATED practice questions.
+Use this structure when appropriate:
 
-Every generated practice question must be treated as:
-"AI-GENERATED PRACTICE QUESTION"
+1. Topic introduction
+2. Simple definition
+3. Main ideas
+4. Important terms
+5. Detailed explanation
+6. Important formulas
+7. Worked examples
+8. UTME examination points
+9. Common mistakes
+10. Quick revision summary
 
-Never call an AI-generated question an authentic JAMB past question.
+Use simple language.
 
-SOLUTIONS:
-- Explain answers clearly.
-- Use simple student-friendly language.
-- Show working for Mathematics and Physics.
-- Do not use confusing computer-style notation when normal mathematical
-  formatting can be used.
-- Clearly separate formulas, substitutions and final answers.
-- If an image contains a question, carefully read the image before solving it.
-- If the image is unclear, say which part cannot be read instead of guessing.
+Do not make the notes unnecessarily complicated.
 
-PAST QUESTIONS:
-If a question comes from the verified database supplied by the application,
-preserve its year, subject and source information.
+For Mathematics and Physics, write mathematics clearly.
+
+Example:
+
+Speed = Distance ÷ Time
+
+Do NOT use ugly computer notation such as:
+
+frac{distance}{time}
+
+Explain what every symbol means.
+
+============================================================
+PRACTICE MODE
+============================================================
+
+PRACTICE MODE creates NEW AI-GENERATED UTME-STYLE practice
+questions.
 
 IMPORTANT:
+
+Every question created in Practice Mode is AI-GENERATED.
+
+NEVER call it:
+- a genuine JAMB question
+- an original JAMB question
+- an authentic past question
+- an official JAMB question
+- a question from a particular JAMB year
+
+If multiple-choice questions are requested:
+
+A. option
+B. option
+C. option
+D. option
+
+Then give:
+
+Correct Answer:
+Explanation:
+
+Make the questions appropriate for serious UTME preparation.
+
+============================================================
+PHOTO / CAMERA
+============================================================
+
+When the student sends a photograph:
+
+1. Read the image carefully.
+2. Identify the question.
+3. Solve it.
+4. Show the working clearly.
+5. Explain the reasoning.
+6. Give the final answer.
+7. If it is multiple choice, identify the correct option.
+
+Do not invent text that cannot be read.
+
+If the photograph is genuinely unclear, tell the student
+which part cannot be read.
+
+============================================================
+ACCURACY
+============================================================
+
 Accuracy is more important than pretending to know something.
+
+Never invent claims about JAMB history or official questions.
+
+============================================================
+TEACHING STYLE
+============================================================
+
+Be clear, friendly and student-friendly.
+
+Use headings, lists and spacing.
+
+Make the student understand WHY the answer is correct,
+not just the final answer.
 """
 
 
 # ============================================================
-# VERIFIED TRUE-MODE DATABASE
-# ============================================================
-#
-# IMPORTANT:
-# Do NOT put invented questions here.
-#
-# This list is intentionally empty until verified genuine questions
-# are added. Later, we can load hundreds or thousands of verified
-# questions from a JSON/database file without changing the main app.
-#
-
-PAST_QUESTIONS = []
-
-
-# ============================================================
-# SUBJECTS
+# AI TEXT REQUEST
 # ============================================================
 
-SUBJECTS = [
-    "English Language",
-    "Mathematics",
-    "Physics",
-    "Chemistry",
-    "Biology",
-    "Economics",
-    "Government",
-    "Literature",
-    "Geography",
-    "Civic Education",
-    "Agricultural Science",
-    "Computer/ICT"
-]
+def ask_ai(prompt):
 
-
-# ============================================================
-# HELPER FUNCTIONS
-# ============================================================
-
-def education_check(message):
-    """
-    Basic first-line filter.
-
-    The AI itself performs the final educational-scope decision,
-    but this helps redirect obvious non-educational requests.
-    """
-
-    text = message.lower().strip()
-
-    educational_words = [
-        "utme", "jamb", "exam", "examination", "school",
-        "student", "study", "lesson", "question", "solve",
-        "mathematics", "math", "physics", "chemistry",
-        "biology", "english", "government", "economics",
-        "literature", "geography", "agriculture", "computer",
-        "calculate", "equation", "formula", "revision",
-        "homework", "assignment", "topic", "subject",
-        "education", "academic", "science"
-    ]
-
-    if any(word in text for word in educational_words):
-        return True
-
-    # Keep the AI available for normal educational questions even
-    # when the student doesn't use obvious keywords.
-    return True
-
-
-def get_true_questions(subject=None, year=None, topic=None, limit=10):
-    """
-    Retrieve ONLY questions that actually exist in the verified
-    question database.
-    """
-
-    results = []
-
-    for question in PAST_QUESTIONS:
-
-        if subject:
-            if question.get("subject", "").lower() != subject.lower():
-                continue
-
-        if year:
-            if str(question.get("year", "")) != str(year):
-                continue
-
-        if topic:
-            if topic.lower() not in question.get("topic", "").lower():
-                continue
-
-        results.append(question)
-
-        if len(results) >= limit:
-            break
-
-    return results
-
-
-def format_true_questions(questions):
-    """
-    Converts verified database questions into a safe prompt.
-    """
-
-    output = []
-
-    for q in questions:
-
-        item = f"""
-YEAR: {q.get("year", "Unknown")}
-SUBJECT: {q.get("subject", "Unknown")}
-TOPIC: {q.get("topic", "Unknown")}
-SOURCE: {q.get("source", "Verified database")}
-
-QUESTION:
-{q.get("question", "")}
-
-OPTIONS:
-A. {q.get("A", "")}
-B. {q.get("B", "")}
-C. {q.get("C", "")}
-D. {q.get("D", "")}
-
-CORRECT ANSWER:
-{q.get("answer", "")}
-
-EXPLANATION:
-{q.get("explanation", "")}
-"""
-
-        output.append(item)
-
-    return "\n\n----------------------------\n\n".join(output)
-
-
-# ============================================================
-# AI TEXT RESPONSE
-# ============================================================
-
-def ask_ai(user_message, mode="practice", subject="", topic=""):
-    """
-
-    Sends the student's request to the OpenAI Responses API.
-    """
-
-    if mode == "true":
-
-        questions = get_true_questions(
-            subject=subject,
-            topic=topic,
-            limit=10
+    if not client:
+        raise RuntimeError(
+            "OPENAI_API_KEY is not configured on Render."
         )
-
-        if not questions:
-
-            return (
-                "TRUE MODE\n\n"
-                "I don't currently have a verified genuine UTME "
-                "question for that request.\n\n"
-                "I will not invent a question and label it as a "
-                "real JAMB/UTME past question.\n\n"
-                "You can switch to PRACTICE MODE for an "
-                "AI-generated UTME-style question."
-            )
-
-        database_text = format_true_questions(questions)
-
-        prompt = f"""
-The student selected TRUE MODE.
-
-Use ONLY the verified questions below.
-
-Do not create additional questions.
-Do not modify them into different questions.
-Do not claim anything outside the supplied database is genuine.
-
-Student request:
-{user_message}
-
-Subject:
-{subject}
-
-Topic:
-{topic}
-
-VERIFIED QUESTIONS:
-{database_text}
-
-Present the verified questions clearly.
-Give the answer and explanation when appropriate.
-Keep the source/year information.
-"""
-
-    else:
-
-        prompt = f"""
-The student selected PRACTICE MODE.
-
-Create an educational UTME-style practice response.
-
-Subject:
-{subject}
-
-Topic:
-{topic}
-
-Student request:
-{user_message}
-
-IMPORTANT:
-Any question you create is AI-GENERATED.
-Do not describe it as a genuine JAMB past question.
-
-Make the question challenging but appropriate for UTME preparation.
-Give four options where a multiple-choice question is requested.
-Provide the correct answer and a clear explanation.
-"""
 
     response = client.responses.create(
         model=MODEL,
@@ -323,52 +195,190 @@ Provide the correct answer and a clear explanation.
 
 
 # ============================================================
-# IMAGE QUESTION SOLVING
+# READ MODE
 # ============================================================
 
-def solve_image(image_data, message="", mode="practice", subject=""):
-    """
-    Solves a question from a camera/photo upload.
+def read_topic(subject, topic):
 
-    The image is sent to the model as an image input.
-    """
+    prompt = f"""
+The student selected READ MODE.
 
-    if not image_data:
-        return "No image was received."
+SUBJECT:
+{subject}
 
-    if mode == "true":
-        extra_rule = """
-The student selected TRUE MODE.
+TOPIC:
+{topic}
 
-Do not claim that the photographed question is a genuine JAMB
-question unless the application has independently verified it.
+Teach this topic as high-quality study notes.
 
-You may solve the question shown in the image, but do not invent
-a year/source.
+Use clear sections.
+
+Include:
+
+# {topic}
+
+## Introduction
+
+Give a simple introduction.
+
+## What is {topic}?
+
+Give a simple definition.
+
+## Main ideas
+
+Explain the important concepts one by one.
+
+## Important terms
+
+Explain important words the student must understand.
+
+## Formulas
+
+If the topic contains formulas:
+
+Write formulas clearly.
+
+Explain what each symbol means.
+
+## Worked examples
+
+Give useful examples and explain them step by step.
+
+## UTME focus
+
+List the important points a UTME student should remember.
+
+## Common mistakes
+
+Explain mistakes students commonly make.
+
+## Quick revision
+
+End with a short revision summary.
+
+IMPORTANT:
+
+These are teaching notes.
+
+Do not claim that anything in the lesson is a genuine
+JAMB past question.
 """
-    else:
-        extra_rule = """
+
+    return ask_ai(prompt)
+
+
+# ============================================================
+# PRACTICE MODE
+# ============================================================
+
+def practice_topic(subject, topic, number):
+
+    prompt = f"""
 The student selected PRACTICE MODE.
-Solve the educational question shown in the image.
+
+SUBJECT:
+{subject}
+
+TOPIC:
+{topic}
+
+NUMBER OF QUESTIONS:
+{number}
+
+Create {number} NEW AI-GENERATED UTME-style practice
+questions.
+
+IMPORTANT:
+
+These are AI-GENERATED PRACTICE QUESTIONS.
+
+Do not call them genuine JAMB questions.
+
+Do not attach a JAMB year to them.
+
+For every multiple-choice question use:
+
+Question 1.
+
+[Question]
+
+A. ...
+B. ...
+C. ...
+D. ...
+
+Correct Answer:
+...
+
+Explanation:
+...
+
+Make the questions challenging enough for serious UTME
+preparation.
+
+Use the selected subject and topic.
+
+For Mathematics and Physics, show calculations clearly.
+"""
+
+    return ask_ai(prompt)
+
+
+# ============================================================
+# IMAGE QUESTION SOLVER
+# ============================================================
+
+def solve_image(image_data, subject, mode):
+
+    if not client:
+        raise RuntimeError(
+            "OPENAI_API_KEY is not configured on Render."
+        )
+
+    if mode == "read":
+
+        mode_instruction = """
+The student is using READ MODE.
+
+Use the photograph as learning material.
+
+Explain the educational material shown in the image
+clearly and teach the student what it means.
+"""
+
+    else:
+
+        mode_instruction = """
+The student is using PRACTICE MODE.
+
+Solve the question shown in the photograph.
+
+Do not claim that the photographed question is a genuine
+JAMB past question.
 """
 
     prompt = f"""
-{extra_rule}
+{mode_instruction}
 
-Subject:
+SUBJECT:
 {subject}
 
-Student's message:
-{message}
+Read the photograph carefully.
 
-Read the question carefully from the photograph.
+If there is a question:
 
-Then:
 1. State what the question is asking.
-2. Solve it step by step.
-3. Give the final answer clearly.
-4. If it is multiple choice, identify the correct option.
-5. Do not guess if the image is too blurry to read.
+2. Show the solution step by step.
+3. Explain the reasoning.
+4. Give the final answer clearly.
+5. If multiple choice, identify the correct option.
+
+If the image contains notes or educational material,
+explain those notes clearly.
+
+If part of the image cannot be read, do not guess.
+Tell the student what part is unclear.
 """
 
     response = client.responses.create(
@@ -384,7 +394,8 @@ Then:
                     },
                     {
                         "type": "input_image",
-                        "image_url": image_data
+                        "image_url": image_data,
+                        "detail": "original"
                     }
                 ]
             }
@@ -395,11 +406,12 @@ Then:
 
 
 # ============================================================
-# WEB PAGE
+# WEBSITE
 # ============================================================
 
 HTML = """
 <!DOCTYPE html>
+
 <html lang="en">
 
 <head>
@@ -439,42 +451,31 @@ body {
 .header p {
     margin: 7px 0 0;
     font-size: 14px;
-    opacity: 0.9;
 }
 
 .controls {
     background: white;
     padding: 12px;
-    display: grid;
-    gap: 9px;
     border-bottom: 1px solid #ddd;
-}
-
-select,
-input {
-    width: 100%;
-    padding: 12px;
-    border: 1px solid #ccc;
-    border-radius: 9px;
-    font-size: 15px;
 }
 
 .mode-buttons {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 8px;
+    margin-bottom: 10px;
 }
 
 .mode-button {
-    padding: 12px;
     border: none;
-    border-radius: 9px;
+    padding: 13px;
+    border-radius: 10px;
     font-weight: bold;
-    cursor: pointer;
+    font-size: 15px;
 }
 
-.true-mode {
-    background: #1d4ed8;
+.read-mode {
+    background: #7c3aed;
     color: white;
 }
 
@@ -487,18 +488,33 @@ input {
     outline: 3px solid #f59e0b;
 }
 
+select,
+input {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid #ccc;
+    border-radius: 9px;
+    font-size: 15px;
+    margin-top: 8px;
+}
+
+.number-row {
+    display: grid;
+    grid-template-columns: 1fr;
+}
+
 #chat {
-    padding: 15px;
-    padding-bottom: 180px;
     max-width: 900px;
     margin: auto;
+    padding: 15px;
+    padding-bottom: 180px;
 }
 
 .message {
-    padding: 13px 15px;
+    padding: 14px 15px;
     margin: 10px 0;
     border-radius: 13px;
-    line-height: 1.55;
+    line-height: 1.6;
     white-space: pre-wrap;
 }
 
@@ -522,6 +538,13 @@ input {
     padding: 10px;
 }
 
+.status {
+    text-align: center;
+    font-size: 13px;
+    color: #555;
+    margin-bottom: 7px;
+}
+
 .composer-row {
     display: grid;
     grid-template-columns: 1fr auto auto auto;
@@ -534,22 +557,15 @@ input {
     padding: 12px;
     background: #111827;
     color: white;
-    font-weight: bold;
+    font-size: 18px;
 }
 
 .send {
     background: #2563eb;
 }
 
-input[type=file] {
+input[type="file"] {
     display: none;
-}
-
-.status {
-    text-align: center;
-    font-size: 12px;
-    color: #666;
-    padding: 5px;
 }
 
 </style>
@@ -557,6 +573,7 @@ input[type=file] {
 </head>
 
 <body>
+
 
 <div class="header">
 
@@ -572,19 +589,22 @@ input[type=file] {
 <div class="mode-buttons">
 
 <button
-id="trueButton"
-class="mode-button true-mode"
-onclick="setMode('true')">
+id="readButton"
+class="mode-button read-mode active"
+onclick="setMode('read')">
 
-🎯 TRUE MODE
+📖 READ MODE
+
 </button>
+
 
 <button
 id="practiceButton"
-class="mode-button practice-mode active"
+class="mode-button practice-mode"
 onclick="setMode('practice')">
 
 🤖 PRACTICE MODE
+
 </button>
 
 </div>
@@ -612,8 +632,22 @@ onclick="setMode('practice')">
 
 <input
 id="topic"
-placeholder="Optional topic e.g. Mechanics, Algebra, Organic Chemistry"
+placeholder="Enter topic e.g. Motion, Algebra, Cell Division"
 >
+
+
+<div class="number-row">
+
+<input
+id="number"
+type="number"
+min="1"
+max="20"
+value="5"
+placeholder="Number of practice questions"
+>
+
+</div>
 
 </div>
 
@@ -624,10 +658,17 @@ placeholder="Optional topic e.g. Mechanics, Algebra, Organic Chemistry"
 
 Welcome to UTME Attack Force AI.
 
-Choose TRUE MODE for verified genuine past questions,
-or PRACTICE MODE for AI-generated UTME-style questions.
+📖 READ MODE
+Choose a subject and topic to study clear notes,
+explanations, formulas and examples.
 
-I focus on education and examination preparation.
+🤖 PRACTICE MODE
+Choose a subject and topic to receive NEW
+AI-GENERATED UTME-style practice questions.
+
+📷 You can photograph a question.
+
+🎤 You can use your microphone.
 
 </div>
 
@@ -636,17 +677,23 @@ I focus on education and examination preparation.
 
 <div class="composer">
 
-<div class="status" id="status">
-PRACTICE MODE
+<div
+class="status"
+id="status">
+
+📖 READ MODE — Learn the topic
+
 </div>
+
 
 <div class="composer-row">
 
 <input
 id="message"
-placeholder="Ask an educational question..."
+placeholder="Enter a topic or question..."
 onkeydown="if(event.key === 'Enter') sendMessage()"
 >
+
 
 <button
 class="action"
@@ -658,7 +705,9 @@ title="Voice input">
 </button>
 
 
-<label class="action" title="Take or upload a question photo">
+<label
+class="action"
+title="Take or upload a photo">
 
 📷
 
@@ -688,15 +737,15 @@ onclick="sendMessage()">
 
 <script>
 
-let mode = "practice";
+let mode = "read";
 
 
 function setMode(newMode) {
 
     mode = newMode;
 
-    const trueButton =
-        document.getElementById("trueButton");
+    const readButton =
+        document.getElementById("readButton");
 
     const practiceButton =
         document.getElementById("practiceButton");
@@ -704,15 +753,21 @@ function setMode(newMode) {
     const status =
         document.getElementById("status");
 
-    trueButton.classList.remove("active");
+    readButton.classList.remove("active");
+
     practiceButton.classList.remove("active");
 
-    if (mode === "true") {
 
-        trueButton.classList.add("active");
+    if (mode === "read") {
+
+        readButton.classList.add("active");
 
         status.textContent =
-            "🎯 TRUE MODE — verified questions only";
+            "📖 READ MODE — Learn the topic";
+
+        document.getElementById("message")
+            .placeholder =
+            "Enter a topic to learn...";
 
     } else {
 
@@ -720,6 +775,10 @@ function setMode(newMode) {
 
         status.textContent =
             "🤖 PRACTICE MODE — AI-generated questions";
+
+        document.getElementById("message")
+            .placeholder =
+            "Enter a topic to practice...";
 
     }
 }
@@ -740,7 +799,10 @@ function addMessage(text, type) {
 
     chat.appendChild(message);
 
-    chat.scrollTop = chat.scrollHeight;
+    window.scrollTo(
+        0,
+        document.body.scrollHeight
+    );
 
     return message;
 }
@@ -754,20 +816,53 @@ async function sendMessage() {
     const message =
         input.value.trim();
 
-    if (!message) return;
-
     const subject =
         document.getElementById("subject").value;
 
-    const topic =
-        document.getElementById("topic").value;
+    const topicInput =
+        document.getElementById("topic").value.trim();
 
-    addMessage(message, "user");
+    const number =
+        document.getElementById("number").value;
+
+
+    if (!subject) {
+
+        alert("Please choose a subject first.");
+
+        return;
+    }
+
+
+    if (!message && !topicInput) {
+
+        alert("Please enter a topic or question.");
+
+        return;
+    }
+
+
+    const topic =
+        topicInput || message;
+
+
+    addMessage(
+        message || topic,
+        "user"
+    );
+
 
     input.value = "";
 
+
     const loading =
-        addMessage("Thinking...", "ai");
+        addMessage(
+            mode === "read"
+            ? "📖 Preparing your lesson..."
+            : "🤖 Preparing your practice questions...",
+            "ai"
+        );
+
 
     try {
 
@@ -783,10 +878,11 @@ async function sendMessage() {
 
                 body: JSON.stringify({
 
-                    message: message,
+                    message: message || topic,
                     mode: mode,
                     subject: subject,
-                    topic: topic
+                    topic: topic,
+                    number: number
 
                 })
 
@@ -796,13 +892,16 @@ async function sendMessage() {
         const data =
             await response.json();
 
+
         loading.remove();
+
 
         addMessage(
             data.reply ||
-            "Sorry, I could not answer that.",
+            "Sorry, I could not process that request.",
             "ai"
         );
+
 
     } catch (error) {
 
@@ -810,7 +909,6 @@ async function sendMessage() {
             "Connection error. Please try again.";
 
     }
-
 }
 
 
@@ -824,20 +922,30 @@ async function sendPhoto() {
 
     if (!file) return;
 
+
     const subject =
         document.getElementById("subject").value;
 
-    const topic =
-        document.getElementById("topic").value;
+
+    if (!subject) {
+
+        alert("Please choose a subject first.");
+
+        fileInput.value = "";
+
+        return;
+    }
+
 
     addMessage(
-        "📷 Question photo uploaded.",
+        "📷 Photo uploaded.",
         "user"
     );
 
+
     const loading =
         addMessage(
-            "Reading and solving the question...",
+            "🔎 Reading the image...",
             "ai"
         );
 
@@ -866,14 +974,11 @@ async function sendPhoto() {
                             image:
                                 reader.result,
 
-                            mode:
-                                mode,
-
                             subject:
                                 subject,
 
-                            topic:
-                                topic
+                            mode:
+                                mode
 
                         })
 
@@ -883,13 +988,16 @@ async function sendPhoto() {
                 const data =
                     await response.json();
 
+
                 loading.remove();
+
 
                 addMessage(
                     data.reply ||
-                    "I could not read that image.",
+                    "I could not process the image.",
                     "ai"
                 );
+
 
             } catch (error) {
 
@@ -902,7 +1010,6 @@ async function sendPhoto() {
 
 
     reader.readAsDataURL(file);
-
 }
 
 
@@ -911,6 +1018,7 @@ function startVoice() {
     const SpeechRecognition =
         window.SpeechRecognition ||
         window.webkitSpeechRecognition;
+
 
     if (!SpeechRecognition) {
 
@@ -925,6 +1033,7 @@ function startVoice() {
 
     const recognition =
         new SpeechRecognition();
+
 
     recognition.lang = "en-NG";
 
@@ -949,13 +1058,15 @@ function startVoice() {
             const text =
                 event.results[0][0].transcript;
 
+
             document.getElementById("message")
                 .value = text;
 
+
             document.getElementById("status")
                 .textContent =
-                mode === "true"
-                ? "🎯 TRUE MODE"
+                mode === "read"
+                ? "📖 READ MODE"
                 : "🤖 PRACTICE MODE";
 
         };
@@ -972,7 +1083,6 @@ function startVoice() {
 
 
     recognition.start();
-
 }
 
 </script>
@@ -984,7 +1094,7 @@ function startVoice() {
 
 
 # ============================================================
-# HOME
+# HOME PAGE
 # ============================================================
 
 @app.route("/")
@@ -994,7 +1104,7 @@ def home():
 
 
 # ============================================================
-# TEXT CHAT
+# CHAT ENDPOINT
 # ============================================================
 
 @app.route("/chat", methods=["POST"])
@@ -1004,29 +1114,63 @@ def chat():
 
     message = data.get("message", "").strip()
 
-    mode = data.get("mode", "practice")
+    mode = data.get("mode", "read")
 
-    subject = data.get("subject", "")
+    subject = data.get("subject", "").strip()
 
-    topic = data.get("topic", "")
+    topic = data.get("topic", "").strip()
+
+    number = data.get("number", 5)
 
 
-    if not message:
+    if not subject:
 
         return jsonify({
             "reply":
-                "Please enter an educational question."
+                "Please choose a subject first."
+        })
+
+
+    if not topic:
+
+        topic = message
+
+
+    if not topic:
+
+        return jsonify({
+            "reply":
+                "Please enter a topic or question."
         })
 
 
     try:
 
-        answer = ask_ai(
-            message,
-            mode=mode,
-            subject=subject,
-            topic=topic
-        )
+        if mode == "read":
+
+            answer = read_topic(
+                subject,
+                topic
+            )
+
+        else:
+
+            try:
+                question_number = int(number)
+            except (TypeError, ValueError):
+                question_number = 5
+
+            question_number = max(
+                1,
+                min(question_number, 20)
+            )
+
+            answer = practice_topic(
+                subject,
+                topic,
+                question_number
+            )
+
 
         return jsonify({
             "reply": answer
@@ -1035,16 +1179,20 @@ def chat():
 
     except Exception as error:
 
-        print("OPENAI ERROR:", error)
+        print(
+            "AI ERROR:",
+            repr(error)
+        )
 
         return jsonify({
             "reply":
-                "Sorry, the AI could not process your question right now."
+                "The AI could not process the request right now. "
+                "Please try again."
         }), 500
 
 
 # ============================================================
-# IMAGE / CAMERA QUESTIONS
+# IMAGE ENDPOINT
 # ============================================================
 
 @app.route("/image", methods=["POST"])
@@ -1054,15 +1202,24 @@ def image_question():
 
     image = data.get("image")
 
-    mode = data.get("mode", "practice")
+    subject = data.get("subject", "").strip()
 
-    subject = data.get("subject", "")
+    mode = data.get("mode", "practice")
 
 
     if not image:
 
         return jsonify({
-            "reply": "No question image was received."
+            "reply":
+                "No image was received."
+        }), 400
+
+
+    if not subject:
+
+        return jsonify({
+            "reply":
+                "Please choose a subject first."
         }), 400
 
 
@@ -1070,10 +1227,10 @@ def image_question():
 
         answer = solve_image(
             image_data=image,
-            message="Solve the question in this image.",
-            mode=mode,
-            subject=subject
+            subject=subject,
+            mode=mode
         )
+
 
         return jsonify({
             "reply": answer
@@ -1082,11 +1239,15 @@ def image_question():
 
     except Exception as error:
 
-        print("IMAGE ERROR:", error)
+        print(
+            "IMAGE ERROR:",
+            repr(error)
+        )
 
         return jsonify({
             "reply":
-                "Sorry, I could not process that question image."
+                "I could not process that image. "
+                "Please make sure the photograph is clear and try again."
         }), 500
 
 
@@ -1110,7 +1271,10 @@ def health():
 if __name__ == "__main__":
 
     port = int(
-        os.environ.get("PORT", 10000)
+        os.environ.get(
+            "PORT",
+            10000
+        )
     )
 
     app.run(
